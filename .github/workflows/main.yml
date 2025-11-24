@@ -55,57 +55,72 @@ jobs:
 
       - name: Network_Install
         run: |
-          # استخدام الرابط الرسمي لـ Tailscale
-          $installerUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-x64.msi"
-          $installerPath = "$env:TEMP\cloud-network.msi"
+          # طريقة بديلة لتحميل Tailscale - استخدام Chocolatey
+          Write-Host "Installing Tailscale using Chocolatey..."
           
-          try {
-              Write-Host "Downloading Tailscale installer..."
-              Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UserAgent "GitHub-Actions"
-              Write-Host "Download completed successfully."
-              
-              Write-Host "Installing Tailscale..."
-              Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-              Remove-Item $installerPath -Force
-              Write-Host "Installation completed."
+          # تثبيت Chocolatey إذا لم يكن مثبتاً
+          $chocoInstalled = Get-Command choco -ErrorAction SilentlyContinue
+          if (-not $chocoInstalled) {
+              Write-Host "Installing Chocolatey..."
+              Set-ExecutionPolicy Bypass -Scope Process -Force
+              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
           }
-          catch {
-              Write-Error "Failed to download or install Tailscale: $($_.Exception.Message)"
-              exit 1
-          }
+          
+          # تثبيت Tailscale باستخدام Chocolatey
+          choco install tailscale -y --force
+          
+          Write-Host "Tailscale installation completed."
 
       - name: Network_Connect
         run: |
-          # انتظر قليلاً لضمان اكتمال التثبيت
-          Start-Sleep -Seconds 10
+          # انتظر لضمان اكتمال التثبيت
+          Start-Sleep -Seconds 15
+          
+          # تأكد من أن خدمة Tailscale تعمل
+          $service = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+          if (-not $service) {
+              Write-Error "Tailscale service not found"
+              exit 1
+          }
+          
+          if ($service.Status -ne "Running") {
+              Start-Service -Name "Tailscale"
+              Start-Sleep -Seconds 5
+          }
           
           # Connect to cloud network
+          Write-Host "Connecting to Tailscale network..."
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.CLOUD_NETWORK_KEY }} --hostname=cloud-desktop-$env:GITHUB_RUN_ID
           
           # Retrieve connection IP
           $cloudIP = $null
           $attempts = 0
-          while (-not $cloudIP -and $attempts -lt 15) {
+          while (-not $cloudIP -and $attempts -lt 20) {
               $cloudIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
               if (-not $cloudIP) {
-                  Start-Sleep -Seconds 4
+                  Write-Host "Waiting for IP assignment... Attempt $($attempts + 1)"
+                  Start-Sleep -Seconds 5
                   $attempts++
               }
           }
           
           if (-not $cloudIP) {
-              Write-Error "Network IP assignment failed"
+              Write-Error "Network IP assignment failed after $attempts attempts"
               exit 1
           }
+          
           echo "CLOUD_IP=$cloudIP" >> $env:GITHUB_ENV
+          Write-Host "Assigned IP: $cloudIP"
       
       - name: Connection_Verify
         run: |
           Write-Host "Cloud Network IP: $env:CLOUD_IP"
           
           # Test remote connection
-          $connectionTest = Test-NetConnection -ComputerName $env:CLOUD_IP -Port 3389
-          if (-not $connectionTest.TcpTestSucceeded) {
+          Write-Host "Testing RDP connection..."
+          $connectionTest = Test-NetConnection -ComputerName $env:CLOUD_IP -Port 3389 -InformationLevel Quiet
+          if (-not $connectionTest) {
               Write-Error "Remote desktop connection test failed"
               exit 1
           }
@@ -116,9 +131,13 @@ jobs:
           Write-Host "`n=== CLOUD DESKTOP ACCESS ==="
           Write-Host "Connection Address: $env:CLOUD_IP"
           Write-Host "Username: CloudAdmin"
-          Write-Host "Password: $(echo $env:CLOUD_CREDS)"
+          Write-Host "Password: CloudPass2024"
           Write-Host "=============================`n"
           
+          # عرض حالة الشبكة
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" status
+          
+          Write-Host "`nMaintaining active session..."
           # Maintain active session
           while ($true) {
               Write-Host "[$(Get-Date)] Cloud Desktop Active - Terminate workflow to stop"
