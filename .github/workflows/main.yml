@@ -1,0 +1,109 @@
+name: CloudDesktop_Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  remote-access-setup:
+    runs-on: windows-latest
+    timeout-minutes: 350
+    
+    steps:
+      - name: RDP_Configuration
+        run: |
+          # Configure RDP settings
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                           -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "SecurityLayer" -Value 0 -Force
+
+          # Configure firewall rules
+          netsh advfirewall firewall delete rule name="CloudRDP-Access"
+          netsh advfirewall firewall add rule name="CloudRDP-Access" `
+            dir=in action=allow protocol=TCP localport=3389
+
+          # Restart terminal services
+          Restart-Service -Name TermService -Force
+
+      - name: User_Setup
+        run: |
+          # Create administrative user
+          $password = "CloudPass2024"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+
+          $existing = Get-LocalUser -Name "CloudAdmin" -ErrorAction SilentlyContinue
+          if ($existing) {
+              Set-LocalUser -Name "CloudAdmin" -Password $securePass
+              Write-Host "User 'CloudAdmin' updated with new password."
+          } else {
+              New-LocalUser -Name "CloudAdmin" -Password $securePass -AccountNeverExpires
+              Add-LocalGroupMember -Group "Administrators" -Member "CloudAdmin"
+              Add-LocalGroupMember -Group "Remote Desktop Users" -Member "CloudAdmin"
+              Write-Host "User 'CloudAdmin' created and added to required groups."
+          }
+
+          # Store credentials
+          echo "CLOUD_CREDS=User: CloudAdmin | Password: $password" >> $env:GITHUB_ENV
+
+          # Verify user creation
+          if (-not (Get-LocalUser -Name "CloudAdmin")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
+
+      - name: Network_Install
+        run: |
+          $installerUrl = "https://tinyurl.com/tailscale-install"
+          $installerPath = "$env:TEMP\cloud-network.msi"
+          
+          Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Network_Connect
+        run: |
+          # Connect to cloud network
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.CLOUD_NETWORK_KEY }} --hostname=cloud-desktop-$env:GITHUB_RUN_ID
+          
+          # Retrieve connection IP
+          $cloudIP = $null
+          $attempts = 0
+          while (-not $cloudIP -and $attempts -lt 15) {
+              $cloudIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 4
+              $attempts++
+          }
+          
+          if (-not $cloudIP) {
+              Write-Error "Network IP assignment failed"
+              exit 1
+          }
+          echo "CLOUD_IP=$cloudIP" >> $env:GITHUB_ENV
+      
+      - name: Connection_Verify
+        run: |
+          Write-Host "Cloud Network IP: $env:CLOUD_IP"
+          
+          # Test remote connection
+          $connectionTest = Test-NetConnection -ComputerName $env:CLOUD_IP -Port 3389
+          if (-not $connectionTest.TcpTestSucceeded) {
+              Write-Error "Remote desktop connection test failed"
+              exit 1
+          }
+          Write-Host "Cloud connection established successfully!"
+
+      - name: Session_Management
+        run: |
+          Write-Host "`n=== CLOUD DESKTOP ACCESS ==="
+          Write-Host "Connection Address: $env:CLOUD_IP"
+          Write-Host "Username: CloudAdmin"
+          Write-Host "Password: $(echo $env:CLOUD_CREDS)"
+          Write-Host "=============================`n"
+          
+          # Maintain active session
+          while ($true) {
+              Write-Host "[$(Get-Date)] Cloud Desktop Active - Terminate workflow to stop"
+              Start-Sleep -Seconds 5500
+          }
