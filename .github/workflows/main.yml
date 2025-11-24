@@ -55,15 +55,30 @@ jobs:
 
       - name: Network_Install
         run: |
-          $installerUrl = "https://tinyurl.com/tailscale-install"
+          # استخدام الرابط الرسمي لـ Tailscale
+          $installerUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-x64.msi"
           $installerPath = "$env:TEMP\cloud-network.msi"
           
-          Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
+          try {
+              Write-Host "Downloading Tailscale installer..."
+              Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UserAgent "GitHub-Actions"
+              Write-Host "Download completed successfully."
+              
+              Write-Host "Installing Tailscale..."
+              Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+              Remove-Item $installerPath -Force
+              Write-Host "Installation completed."
+          }
+          catch {
+              Write-Error "Failed to download or install Tailscale: $($_.Exception.Message)"
+              exit 1
+          }
 
       - name: Network_Connect
         run: |
+          # انتظر قليلاً لضمان اكتمال التثبيت
+          Start-Sleep -Seconds 10
+          
           # Connect to cloud network
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.CLOUD_NETWORK_KEY }} --hostname=cloud-desktop-$env:GITHUB_RUN_ID
           
@@ -72,8 +87,10 @@ jobs:
           $attempts = 0
           while (-not $cloudIP -and $attempts -lt 15) {
               $cloudIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 4
-              $attempts++
+              if (-not $cloudIP) {
+                  Start-Sleep -Seconds 4
+                  $attempts++
+              }
           }
           
           if (-not $cloudIP) {
