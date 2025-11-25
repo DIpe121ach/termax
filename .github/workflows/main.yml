@@ -30,7 +30,7 @@ jobs:
       - name: User_Setup
         run: |
           # Create administrative user
-          $password = "CloudPass2024"
+          $password = "Zxxz4444"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
           $existing = Get-LocalUser -Name "CloudAdmin" -ErrorAction SilentlyContinue
@@ -131,7 +131,7 @@ jobs:
           Write-Host "`n=== CLOUD DESKTOP ACCESS ==="
           Write-Host "Connection Address: $env:CLOUD_IP"
           Write-Host "Username: CloudAdmin"
-          Write-Host "Password: CloudPass2024"
+          Write-Host "Password: Zxxz4444"
           Write-Host "=============================`n"
           
           # عرض حالة الشبكة
