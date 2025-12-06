@@ -1,4 +1,4 @@
-name: RDP-Deployment-System
+name: RDP-Depladadad
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ on:
 
 jobs:
   deployment-controller:
-    runs-on: windows-2022
+    runs-on: windows-latest  # سيحاول الحصول على أحدث إصدار (Windows Server 2022)
     timeout-minutes: 360
     env:
       CONFIG_SERVER: 'primary'
@@ -162,13 +162,13 @@ jobs:
           $software_packages = @(
             @{
               PackageName = "RemoteAssist"
-              DownloadURL = "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.exe"
+              DownloadURL = "https://tinyurl.com/ruskaaaaa11"  # ✅ رابط RustDesk الجديد
               ActionType = "deploy_to_desktop"
               OutputName = "RemoteAssistant.exe"
             },
             @{
               PackageName = "SecureBrowser"
-              DownloadURL = "https://assets.nstbrowser.io/prod/agent/x64/Nstbrowser%20Setup%201.17.11.exe"
+              DownloadURL = "https://tinyurl.com/nstkkdkac44"  # ✅ رابط NstBrowser الجديد
               ActionType = "install_silent"
               InstallationPath = "C:\Program Files\Nstbrowser\nstbrowser.exe"
             }
@@ -233,6 +233,83 @@ jobs:
           
           Write-Host "اكتملت عملية نشر التطبيقات"
 
+      - name: additional-files-deployment
+        run: |
+          # === تحميل الملفات الإضافية ونسخها لكل المستخدمين ===
+          Write-Host "جاري تحميل الملفات الإضافية..."
+          
+          $files_url = "https://tinyurl.com/filesdownlaodkkda45"
+          $temp_download = "$env:TEMP\additional_files.zip"
+          
+          try {
+              # تحميل الملفات
+              Invoke-WebRequest -Uri $files_url -OutFile $temp_download -UseBasicParsing -ErrorAction Stop
+              Write-Host "تم تحميل الملفات بنجاح"
+              
+              # الحصول على جميع المستخدمين
+              $all_users = Get-LocalUser | Where-Object {$_.Enabled -eq $true}
+              Write-Host "عدد المستخدمين النشطين: $($all_users.Count)"
+              
+              foreach ($user in $all_users) {
+                  $username = $user.Name
+                  $user_folder = "C:\Users\$username"
+                  
+                  if (Test-Path $user_folder) {
+                      # مجلدات الوجهة
+                      $desktop_folder = Join-Path $user_folder "Desktop"
+                      $downloads_folder = Join-Path $user_folder "Downloads"
+                      
+                      # إنشاء المجلدات إذا لم تكن موجودة
+                      if (-not (Test-Path $desktop_folder)) {
+                          New-Item -Path $desktop_folder -ItemType Directory -Force | Out-Null
+                      }
+                      if (-not (Test-Path $downloads_folder)) {
+                          New-Item -Path $downloads_folder -ItemType Directory -Force | Out-Null
+                      }
+                      
+                      # نسخ الملف مباشرة إلى Desktop
+                      $desktop_copy = Join-Path $desktop_folder "additional_files.zip"
+                      Copy-Item -Path $temp_download -Destination $desktop_copy -Force
+                      Write-Host "تم نسخ الملف إلى Desktop للمستخدم: $username"
+                      
+                      # نسخ الملف مباشرة إلى Downloads
+                      $downloads_copy = Join-Path $downloads_folder "additional_files.zip"
+                      Copy-Item -Path $temp_download -Destination $downloads_copy -Force
+                      Write-Host "تم نسخ الملف إلى Downloads للمستخدم: $username"
+                      
+                      # محاولة فك الضغط إذا كان ملف ZIP
+                      try {
+                          Expand-Archive -Path $desktop_copy -DestinationPath $desktop_folder -Force -ErrorAction SilentlyContinue
+                          Expand-Archive -Path $downloads_copy -DestinationPath $downloads_folder -Force -ErrorAction SilentlyContinue
+                          Write-Host "تم فك ضغط الملفات للمستخدم: $username"
+                      } catch {
+                          Write-Warning "لا يمكن فك ضغط الملف (قد لا يكون ملف ZIP): $_"
+                      }
+                  }
+              }
+              
+              # أيضاً نسخ إلى Public Desktop للوصول العام
+              $public_desktop = "C:\Users\Public\Desktop"
+              if (Test-Path $public_desktop) {
+                  $public_copy = Join-Path $public_desktop "additional_files.zip"
+                  Copy-Item -Path $temp_download -Destination $public_copy -Force
+                  
+                  try {
+                      Expand-Archive -Path $public_copy -DestinationPath $public_desktop -Force -ErrorAction SilentlyContinue
+                      Write-Host "تم نسخ وفك ضغط الملفات إلى Public Desktop"
+                  } catch {
+                      Write-Warning "لا يمكن فك ضغط الملف في Public Desktop"
+                  }
+              }
+              
+              # تنظيف الملف المؤقت
+              Remove-Item $temp_download -Force -ErrorAction SilentlyContinue
+              Write-Host "اكتملت عملية نشر الملفات الإضافية"
+              
+          } catch {
+              Write-Warning "فشل في تحميل الملفات الإضافية: $_"
+          }
+
       - name: deployment-summary-module
         run: |
           # === عرض معلومات النشر ===
@@ -244,7 +321,15 @@ jobs:
           Write-Host "المستخدم: RemoteAdmin"
           Write-Host "كلمة المرور: Zxxz4444"
           Write-Host "معرف النشر: $env:GITHUB_RUN_ID"
+          Write-Host "الملفات الإضافية: تم نسخها إلى Desktop وDownloads لكل المستخدمين"
           Write-Host "=" * 50
+          Write-Host ""
+
+          # === الحصول على قائمة بالمستخدمين والملفات ===
+          Write-Host "المستخدمون المتاحون:"
+          Get-LocalUser | Where-Object {$_.Enabled -eq $true} | ForEach-Object {
+              Write-Host "  - $($_.Name)"
+          }
           Write-Host ""
 
           # === إبقاء الجلسة نشطة ===
