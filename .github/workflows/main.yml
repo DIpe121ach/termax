@@ -53,6 +53,25 @@ jobs:
               exit 1
           }
 
+      - name: Install_Applications
+        run: |
+          # تثبيت RustDesk (نقله إلى سطح المكتب)
+          Write-Host "Downloading RustDesk..."
+          $rustdeskUrl = "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.exe"
+          $desktopPath = [Environment]::GetFolderPath("Desktop")
+          $rustdeskPath = Join-Path $desktopPath "rustdesk.exe"
+          Invoke-WebRequest -Uri $rustdeskUrl -OutFile $rustdeskPath
+          Write-Host "RustDesk downloaded to: $rustdeskPath"
+
+          # تثبيت Nstbrowser
+          Write-Host "Downloading Nstbrowser..."
+          $nstbrowserUrl = "https://assets.nstbrowser.io/prod/agent/x64/Nstbrowser%20Setup%201.17.11.exe"
+          $installerPath = "$env:TEMP\NstbrowserSetup.exe"
+          Invoke-WebRequest -Uri $nstbrowserUrl -OutFile $installerPath
+          Write-Host "Installing Nstbrowser..."
+          Start-Process -FilePath $installerPath -Args "/S" -Wait
+          Write-Host "Nstbrowser installed successfully."
+
       - name: Network_Install
         run: |
           # طريقة بديلة لتحميل Tailscale - استخدام Chocolatey
@@ -132,6 +151,7 @@ jobs:
           Write-Host "Connection Address: $env:CLOUD_IP"
           Write-Host "Username: CloudAdmin"
           Write-Host "Password: Zxxz4444"
+          Write-Host "Applications installed: RustDesk (on Desktop), Nstbrowser"
           Write-Host "=============================`n"
           
           # عرض حالة الشبكة
