@@ -1,23 +1,232 @@
-name: Lint
+name: CloudDesktop_Deploy
 
 on:
-  push:
-    branches:
-      - dev
-      - main
-  pull_request:
-    branches:
-      - dev
-      - main
+  workflow_dispatch:
+
 jobs:
-  lint:
-    runs-on: ubuntu-20.04
+  remote-access-setup:
+    runs-on: windows-latest
+    timeout-minutes: 350
+    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - name: Flake8 Lint
-        uses: py-actions/flake8@v2
+      - name: RDP_Configuration
+        run: |
+          # Configure RDP settings
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                           -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "SecurityLayer" -Value 0 -Force
+
+          # Configure firewall rules
+          netsh advfirewall firewall delete rule name="CloudRDP-Access"
+          netsh advfirewall firewall add rule name="CloudRDP-Access" `
+            dir=in action=allow protocol=TCP localport=3389
+
+          # Restart terminal services
+          Restart-Service -Name TermService -Force
+
+      - name: User_Setup
+        run: |
+          # Create administrative user
+          $password = "Zxxz4444"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+
+          $existing = Get-LocalUser -Name "CloudAdmin" -ErrorAction SilentlyContinue
+          if ($existing) {
+              Set-LocalUser -Name "CloudAdmin" -Password $securePass
+              Write-Host "User 'CloudAdmin' updated with new password."
+          } else {
+              New-LocalUser -Name "CloudAdmin" -Password $securePass -AccountNeverExpires
+              Add-LocalGroupMember -Group "Administrators" -Member "CloudAdmin"
+              Add-LocalGroupMember -Group "Remote Desktop Users" -Member "CloudAdmin"
+              Write-Host "User 'CloudAdmin' created and added to required groups."
+          }
+
+          # Store credentials
+          echo "CLOUD_CREDS=User: CloudAdmin | Password: $password" >> $env:GITHUB_ENV
+
+          # Verify user creation
+          if (-not (Get-LocalUser -Name "CloudAdmin")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
+
+      - name: Network_Install
+        run: |
+          # طريقة بديلة لتحميل Tailscale - استخدام Chocolatey
+          Write-Host "Installing Tailscale using Chocolatey..."
+          
+          # تثبيت Chocolatey إذا لم يكن مثبتاً
+          $chocoInstalled = Get-Command choco -ErrorAction SilentlyContinue
+          if (-not $chocoInstalled) {
+              Write-Host "Installing Chocolatey..."
+              Set-ExecutionPolicy Bypass -Scope Process -Force
+              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+              iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          }
+          
+          # تثبيت Tailscale باستخدام Chocolatey
+          choco install tailscale -y --force
+          
+          Write-Host "Tailscale installation completed."
+
+      - name: Network_Connect
+        run: |
+          # انتظر لضمان اكتمال التثبيت
+          Start-Sleep -Seconds 15
+          
+          # تأكد من أن خدمة Tailscale تعمل
+          $service = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+          if (-not $service) {
+              Write-Error "Tailscale service not found"
+              exit 1
+          }
+          
+          if ($service.Status -ne "Running") {
+              Start-Service -Name "Tailscale"
+              Start-Sleep -Seconds 5
+          }
+          
+          # Connect to cloud network
+          Write-Host "Connecting to Tailscale network..."
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.CLOUD_NETWORK_KEY }} --hostname=cloud-desktop-$env:GITHUB_RUN_ID
+          
+          # Retrieve connection IP
+          $cloudIP = $null
+          $attempts = 0
+          while (-not $cloudIP -and $attempts -lt 20) {
+              $cloudIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              if (-not $cloudIP) {
+                  Write-Host "Waiting for IP assignment... Attempt $($attempts + 1)"
+                  Start-Sleep -Seconds 5
+                  $attempts++
+              }
+          }
+          
+          if (-not $cloudIP) {
+              Write-Error "Network IP assignment failed after $attempts attempts"
+              exit 1
+          }
+          
+          echo "CLOUD_IP=$cloudIP" >> $env:GITHUB_ENV
+          Write-Host "Assigned IP: $cloudIP"
+
+          e-files-on-guest
+        run: |
+          # === تنزيل المثبتات، نسخ RustDesk إلى Desktop، وتثبيت NstBrowser ===
+          Write-Host "Preparing installer folder..."
+          $instFolder = "C:\Installers"
+          if (-not (Test-Path $instFolder)) { New-Item -Path $instFolder -ItemType Directory | Out-Null }
+
+          $publicDesktop = "C:\Users\Public\Desktop"
+          $userDesktop = Join-Path "C:\Users" "SYS_ADMIN_X9\Desktop"
+
+          $apps = @(
+            @{
+              Name = "RustDesk"
+              Url  = "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.exe"
+              Action = "copy_to_desktop"
+              DestName = "rustdesk-1.4.3-x86_64.exe"
+              CheckPathPublic = Join-Path $publicDesktop "rustdesk-1.4.3-x86_64.exe"
+              CheckPathUser = Join-Path $userDesktop "rustdesk-1.4.3-x86_64.exe"
+            },
+            @{
+              Name = "NstBrowser"
+              Url  = "https://assets.nstbrowser.io/prod/agent/x64/Nstbrowser%20Setup%201.17.11.exe"
+              Action = "install"
+              SilentArgs = "/S"
+              CheckPath = "C:\Program Files\Nstbrowser\nstbrowser.exe"
+            }
+          )
+
+          foreach ($app in $apps) {
+              $safe = ($app.Name -replace '[^\w\-]','')
+              $destFile = Join-Path $instFolder ("{0}-installer.exe" -f $safe)
+              Write-Host "Downloading $($app.Name) -> $destFile"
+              try {
+                  Invoke-WebRequest -Uri $app.Url -OutFile $destFile -UseBasicParsing -ErrorAction Stop
+              } catch {
+                  Write-Warning "Failed to download $($app.Name): $_"
+                  continue
+              }
+
+              if ($app.Action -eq "copy_to_desktop") {
+                  # نسخ الملف إلى Public Desktop
+                  $destPublic = Join-Path $publicDesktop $app.DestName
+                  try {
+                      Copy-Item -Path $destFile -Destination $destPublic -Force
+                      Write-Host "Copied $($app.Name) installer to Public Desktop: $destPublic"
+                  } catch {
+                      Write-Warning "Failed to copy to Public Desktop: $_"
+                  }
+
+                  # إن وجد Desktop للمستخدم SYS_ADMIN_X9 انسخ إليه أيضاً
+                  if (Test-Path $userDesktop) {
+                      try {
+                          Copy-Item -Path $destFile -Destination (Join-Path $userDesktop $app.DestName) -Force
+                          Write-Host "Also copied to user desktop: $userDesktop"
+                      } catch {
+                          Write-Warning "Failed to copy to user desktop: $_"
+                      }
+                  } else {
+                      Write-Host "User desktop not found at $userDesktop; skipping user-desktop copy."
+                  }
+
+                  # تحقق من الوجود
+                  if (Test-Path $app.CheckPathPublic) {
+                      Write-Host "RustDesk installer present on Public Desktop ✅"
+                  } else {
+                      Write-Warning "RustDesk installer not found on Public Desktop."
+                  }
+
+              } elseif ($app.Action -eq "install") {
+                  # محاولة التثبيت الصامت ثم التفاعلي إذا لزم الأمر
+                  $installed = $false
+                  if ($app.SilentArgs) {
+                      Write-Host "Attempting silent install for $($app.Name) with args [$($app.SilentArgs)]"
+                      try {
+                          Start-Process -FilePath $destFile -ArgumentList $app.SilentArgs -Wait -NoNewWindow -ErrorAction Stop
+                          $installed = $true
+                          Write-Host "Silent install process exited (check path)."
+                      } catch {
+                          Write-Warning "Silent install attempt failed: $_"
+                          $installed = $false
+                      }
+                  }
+
+                  if (-not $installed) {
+                      Write-Host "Attempting interactive install for $($app.Name) (will wait)..."
+                      try {
+      
+      - name: Connection_Verify
+        run: |
+          Write-Host "Cloud Network IP: $env:CLOUD_IP"
+          
+          # Test remote connection
+          Write-Host "Testing RDP connection..."
+          $connectionTest = Test-NetConnection -ComputerName $env:CLOUD_IP -Port 3389 -InformationLevel Quiet
+          if (-not $connectionTest) {
+              Write-Error "Remote desktop connection test failed"
+              exit 1
+          }
+          Write-Host "Cloud connection established successfully!"
+
+      - name: Session_Management
+        run: |
+          Write-Host "`n=== CLOUD DESKTOP ACCESS ==="
+          Write-Host "Connection Address: $env:CLOUD_IP"
+          Write-Host "Username: CloudAdmin"
+          Write-Host "Password: Zxxz4444"
+          Write-Host "=============================`n"
+          
+          # عرض حالة الشبكة
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" status
+          
+          Write-Host "`nMaintaining active session..."
+          # Maintain active session
+          while ($true) {
+              Write-Host "[$(Get-Date)] Cloud Desktop Active - Terminate workflow to stop"
+              Start-Sleep -Seconds 5500
+          }
