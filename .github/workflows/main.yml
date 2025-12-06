@@ -55,13 +55,22 @@ jobs:
 
       - name: Install_Applications
         run: |
-          # تثبيت RustDesk (نقله إلى سطح المكتب)
+          # تنزيل RustDesk إلى مجلد مؤقت
           Write-Host "Downloading RustDesk..."
           $rustdeskUrl = "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.exe"
-          $desktopPath = [Environment]::GetFolderPath("Desktop")
-          $rustdeskPath = Join-Path $desktopPath "rustdesk.exe"
-          Invoke-WebRequest -Uri $rustdeskUrl -OutFile $rustdeskPath
-          Write-Host "RustDesk downloaded to: $rustdeskPath"
+          $tempRustdesk = "C:\ProgramData\rustdesk.exe"
+          Invoke-WebRequest -Uri $rustdeskUrl -OutFile $tempRustdesk
+
+          # إنشاء مجلد Desktop لمستخدم CloudAdmin إذا لم يكن موجوداً
+          $cloudAdminDesktop = "C:\Users\CloudAdmin\Desktop"
+          if (-not (Test-Path $cloudAdminDesktop)) {
+              New-Item -ItemType Directory -Path $cloudAdminDesktop -Force
+          }
+
+          # نسخ RustDesk إلى سطح مكتب CloudAdmin
+          $destRustdesk = Join-Path $cloudAdminDesktop "rustdesk.exe"
+          Copy-Item -Path $tempRustdesk -Destination $destRustdesk -Force
+          Write-Host "RustDesk copied to: $destRustdesk"
 
           # تثبيت Nstbrowser
           Write-Host "Downloading Nstbrowser..."
