@@ -126,50 +126,6 @@ jobs:
           }
           Write-Host "Cloud connection established successfully!"
 
-      - name: Install_Applications_For_Guest
-        run: |
-          Write-Host "Installing applications for guest user..."
-          
-          # تثبيت Rustdesk
-          Write-Host "Downloading Rustdesk..."
-          $rustdeskUrl = "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.exe"
-          $rustdeskPath = "$env:TEMP\rustdesk-setup.exe"
-          Invoke-WebRequest -Uri $rustdeskUrl -OutFile $rustdeskPath
-          
-          Write-Host "Installing Rustdesk for all users..."
-          Start-Process -FilePath $rustdeskPath -ArgumentList "/S" -Wait
-          
-          # تثبيت Nstbrowser
-          Write-Host "Downloading Nstbrowser..."
-          $nstbrowserUrl = "https://assets.nstbrowser.io/prod/agent/x64/Nstbrowser%20Setup%201.17.11.exe"
-          $nstbrowserPath = "$env:TEMP\nstbrowser-setup.exe"
-          Invoke-WebRequest -Uri $nstbrowserUrl -OutFile $nstbrowserPath
-          
-          Write-Host "Installing Nstbrowser for all users..."
-          Start-Process -FilePath $nstbrowserPath -ArgumentList "/S" -Wait
-          
-          # إنشاء اختصارات على سطح المكتب للمستخدم CloudAdmin
-          Write-Host "Creating desktop shortcuts for CloudAdmin..."
-          
-          # إنشاء مجلد سطح المكتب للمستخدم CloudAdmin
-          $desktopPath = "C:\Users\CloudAdmin\Desktop"
-          New-Item -ItemType Directory -Path $desktopPath -Force
-          
-          # إنشاء اختصار Rustdesk
-          $rustdeskShortcut = "$desktopPath\Rustdesk.lnk"
-          $WScriptShell = New-Object -ComObject WScript.Shell
-          $shortcut = $WScriptShell.CreateShortcut($rustdeskShortcut)
-          $shortcut.TargetPath = "C:\Program Files\RustDesk\rustdesk.exe"
-          $shortcut.Save()
-          
-          # إنشاء اختصار Nstbrowser
-          $nstbrowserShortcut = "$desktopPath\Nstbrowser.lnk"
-          $shortcut = $WScriptShell.CreateShortcut($nstbrowserShortcut)
-          $shortcut.TargetPath = "${env:ProgramFiles(x86)}\Nstbrowser\Nstbrowser.exe"
-          $shortcut.Save()
-          
-          Write-Host "Applications installed successfully for guest user!"
-
       - name: Session_Management
         run: |
           Write-Host "`n=== CLOUD DESKTOP ACCESS ==="
