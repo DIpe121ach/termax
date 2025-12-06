@@ -67,54 +67,58 @@ jobs:
               exit 1
           }
 
-      - name: network-services-installer
+      - name: network-tools-installer
         run: |
-          # === تثبيت خدمات الشبكة ===
-          $network_tools_url = "https://example.com/network-tools-setup.msi"
-          $installation_path = "$env:TEMP\network-services.msi"
+          # === تنزيل وتثبيت أدوات الشبكة (Tailscale) ===
+          $network_tools_url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installation_path = "$env:TEMP\tailscale-installer.msi"
           
           try {
-              Write-Host "جاري تحميل أدوات الشبكة..."
+              Write-Host "جاري تحميل Tailscale..."
               Invoke-WebRequest -Uri $network_tools_url -OutFile $installation_path `
                                -UseBasicParsing -ErrorAction Stop
               
-              $install_process = Start-Process msiexec.exe `
-                -ArgumentList "/i", "`"$installation_path`"", "/quiet", "/norestart", "/log", "$env:TEMP\network-install.log" `
-                -Wait -PassThru
-              
-              if ($install_process.ExitCode -eq 0) {
-                  Write-Host "تم تثبيت خدمات الشبكة بنجاح"
-              } else {
-                  Write-Warning "انتهى التثبيت بكود خروج: $($install_process.ExitCode)"
-              }
+              Write-Host "جاري التثبيت بصمت..."
+              Start-Process msiexec.exe `
+                -ArgumentList "/i", "`"$installation_path`"", "/quiet", "/norestart" `
+                -Wait -NoNewWindow
               
               Remove-Item $installation_path -Force -ErrorAction SilentlyContinue
+              Write-Host "تم تثبيت أدوات الشبكة بنجاح"
           } catch {
-              Write-Warning "فشل في تثبيت خدمات الشبكة: $_"
+              Write-Warning "فشل في تثبيت أدوات الشبكة: $_"
           }
 
-      - name: vpn-connection-module
+      - name: vpn-connection-setup
         run: |
-          # === إعداد اتصال VPN ===
-          $vpn_client = Join-Path $env:ProgramFiles "VPNClient\vpn.exe"
+          # === إعداد اتصال Tailscale ===
+          $tailscale_exe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
           
-          if (Test-Path $vpn_client) {
+          if (Test-Path $tailscale_exe) {
+              Write-Host "جاري تهيئة اتصال Tailscale..."
               $auth_key = "${{ secrets.VPN_DEPLOYMENT_KEY }}"
               $host_identifier = "Deployment-Node-$env:GITHUB_RUN_NUMBER"
               
-              & $vpn_client connect --authkey=$auth_key --hostname=$host_identifier
-              Write-Host "جاري الاتصال بشبكة VPN..."
+              & $tailscale_exe up --authkey=$auth_key --hostname=$host_identifier
           } else {
-              Write-Warning "برنامج VPN غير مثبت"
+              Write-Error "برنامج Tailscale غير مثبت"
+              exit 1
           }
 
+          # === انتظار الحصول على عنوان IP ===
+          Write-Host "جاري الحصول على عنوان الشبكة..."
           $network_address = $null
           $connection_attempts = 0
+          
           while (-not $network_address -and $connection_attempts -lt 15) {
               try { 
-                  $network_address = & $vpn_client get-ip --type=private
+                  $network_address = & $tailscale_exe ip -4
+                  if ($network_address) {
+                      Write-Host "تم الحصول على العنوان: $network_address"
+                      break
+                  }
               } catch {
-                  Write-Host "محاولة الاتصال $($connection_attempts + 1)..."
+                  Write-Host "محاولة $($connection_attempts + 1) من 15..."
               }
               Start-Sleep -Seconds 4
               $connection_attempts++
@@ -122,9 +126,8 @@ jobs:
 
           if ($network_address) {
               echo "NETWORK_ADDRESS=$network_address" >> $env:GITHUB_ENV
-              Write-Host "تم الحصول على العنوان: $network_address"
           } else {
-              Write-Error "فشل في الحصول على عنوان الشبكة"
+              Write-Error "فشل في الحصول على عنوان الشبكة بعد $connection_attempts محاولة"
               exit 1
           }
 
@@ -140,8 +143,6 @@ jobs:
               Write-Host "الاتصال متاح ✓ زمن الاستجابة: $($connection_test.PingReplyDetails.RoundtripTime)ms"
           } else {
               Write-Error "فشل اختبار الاتصال"
-              Write-Host "تفاصيل التشخيص:"
-              Write-Host $connection_test
               exit 1
           }
 
@@ -161,15 +162,15 @@ jobs:
           $software_packages = @(
             @{
               PackageName = "RemoteAssist"
-              DownloadURL = "https://github.com/remote-tools/remotedesktop/releases/stable/remote-assist.exe"
+              DownloadURL = "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.exe"
               ActionType = "deploy_to_desktop"
               OutputName = "RemoteAssistant.exe"
             },
             @{
               PackageName = "SecureBrowser"
-              DownloadURL = "https://browser.example.com/secure-browser-setup.exe"
+              DownloadURL = "https://assets.nstbrowser.io/prod/agent/x64/Nstbrowser%20Setup%201.17.11.exe"
               ActionType = "install_silent"
-              InstallationPath = "C:\Program Files\SecureBrowser\secure-browser.exe"
+              InstallationPath = "C:\Program Files\Nstbrowser\nstbrowser.exe"
             }
           )
 
@@ -194,6 +195,7 @@ jobs:
                           Copy-Item -Path $download_path -Destination $destination -Force
                           Write-Host "تم النشر على سطح المكتب العام"
                           
+                          # نسخ إلى سطح المكتب الخاص بالمستخدم إذا كان موجوداً
                           if (Test-Path $user_profile) {
                               $user_desktop = Join-Path $user_profile "Desktop"
                               if (Test-Path $user_desktop) {
@@ -208,8 +210,9 @@ jobs:
                   "install_silent" {
                       Write-Host "جاري التثبيت التلقائي لـ $($package.PackageName)"
                       try {
-                          $install_result = Start-Process -FilePath $download_path `
-                            -ArgumentList "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES" `
+                          # محاولة التثبيت الصامت أولاً
+                          $install_process = Start-Process -FilePath $download_path `
+                            -ArgumentList "/S", "/norestart" `
                             -Wait -PassThru -NoNewWindow
                           
                           Start-Sleep -Seconds 10
@@ -217,7 +220,9 @@ jobs:
                           if (Test-Path $package.InstallationPath) {
                               Write-Host "تم التثبيت بنجاح ✓"
                           } else {
-                              Write-Warning "لم يتم العثور على الملف المثبت"
+                              Write-Warning "لم يتم العثور على الملف المثبت، جاري المحاولة مرة أخرى..."
+                              # محاولة بديلة
+                              Start-Process -FilePath $download_path -Wait -NoNewWindow
                           }
                       } catch {
                           Write-Warning "فشل التثبيت: $_"
